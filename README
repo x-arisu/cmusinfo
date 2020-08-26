@@ -1,0 +1,46 @@
+CMUSINFO
+
+What it does:
+Outputs the cmus players status and the currently playing song.
+Displays album art through mpv.
+Sends notifications when the song changes.
+
+Notable features:
+If a song has embedded album art, it will use that songs album art
+instead of album art that may be found in the folder.
+
+The -n / --notify flag enables notifications in mpv. Meaning that, when
+the song changes, text will appear with the songs information. Useful
+for when mpv is in fullscreen.
+
+If a song is not properly tagged with the artist and title, it will
+use the file name without the extension instead.
+
+Dependencies:
+cmus
+bash
+coreutils
+
+Optional:
+mpv (Album Art)
+ffmpeg (Album Art)
+socat (Album Art)
+libnotify-bin (Desktop Notifications)
+
+Usage:
+-h or --help to print this text
+-a or --album to turn on album mode
+-n or --notify to turn on notifications for album mode
+-nd or --notifydesktop turn on desktop notifications
+-t or --title <title> to set mpv's title (Default: Album Art)
+-r or --repeat to have the program run more than once
+-d or --delay <delay> set the programs delay in the loop (Default: 5)
+-c or --clean cleans temporary files and exits
+-i or --image sets mpv's image (Default: ~/.local/share/notfound.png OR blank window)
+-l or --license displays license information and exits
+-v or --version displays program version and exits
+
+Troubleshooting:
+If something isn't working properly, try running
+cmusinfo --clean
+If that doesn't fix the problem please create an issue.

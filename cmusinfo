@@ -1,0 +1,265 @@
+#!/bin/bash
+# Album art and status line program for CMUS
+# Copyright (C) 2020  ArisuTheWired
+
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>. 
+
+#Runs MPV in socket mode if not running and
+#updates the album art for the currently playing song
+#expects CMUSSTATUS MPVTITLE IMAGE
+function album ()
+{
+CMUSSTATUS="$1"
+MPVTITLE="$2"
+FILEDIR="$(dirname "$(echo "$CMUSSTATUS" | grep file\ | sed s/file\ //)")"
+if ! [ -e $IMAGE ]
+then
+  ALBUMCOVER=""
+else
+  ALBUMCOVER="$IMAGE"
+fi
+#tries to extract embedded album art
+if ! ffmpeg -i "$(echo "$CMUSSTATUS" | grep file\ | sed s/file\ //)" -vcodec copy /tmp/songart.jpg -y -loglevel -8
+then
+  for file in "$FILEDIR"/*
+  do
+    #removes path and file extension, leaving the filename
+    filename="$(basename "$(echo "${file%.*}" | tr -d '[:blank:]')")"
+    filename="$(echo "$filename" | tr -t '[:upper:]' '[:lower:]')"
+    if [ "$filename" == "cover" ]
+    then
+      ALBUMCOVER="$file"
+      break
+    elif [ "$filename" == "front" ]
+    then
+      ALBUMCOVER="$file"
+      break
+    elif [ "$filename" == "album" ]
+    then
+      ALBUMCOVER="$file"
+      break
+    fi
+  done
+else
+  ALBUMCOVER="/tmp/songart.jpg"
+fi
+if ! [ -e /tmp/mpvcmussocket ]
+then
+  mpv --input-unix-socket=/tmp/mpvcmussocket \
+  --idle=yes \
+  --fullscreen=no \
+  --pause \
+  --geometry=120x120 \
+  --vo=x11  \
+  --force-window=yes \
+  --title="$MPVTITLE" \
+  --osd-align-x=center \
+  --osd-align-y=bottom \
+  "$ALBUMCOVER" 2>/dev/null 1>&2 &
+  #add "-vf scale=120:120" for better looking images in floating/window
+  #wait for MPV to start so notifications work
+  sleep 0.2
+else
+  echo '{ "command": ["loadfile", "'"$ALBUMCOVER"'"]}' | socat - /tmp/mpvcmussocket > /dev/null
+fi
+}
+#cleans up temporary files and properly quits mpv
+function cleanup
+{
+  if [ -e /tmp/cmusinfo ]
+  then
+    rm /tmp/cmusinfo
+  fi
+  if [ -e /tmp/mpvcmussocket ]
+  then
+    echo '{ "command": ["quit"]}' | socat - /tmp/mpvcmussocket > /dev/null
+    rm /tmp/mpvcmussocket
+  fi
+  if [ -e /tmp/songart.jpg ]
+  then
+    rm /tmp/songart.jpg
+  fi
+  if [ "$1" == "exit" ]
+  then
+    exit
+  fi
+}
+#expects: cmusinfo ALBUMMODE NOTIFY DESKTOP MPVTITLE IMAGE
+function cmusinfo ()
+{
+  ALBUMMODE=$1
+  NOTIFY=$2
+  DESKTOP=$3
+  MPVTITLE="$4"
+  IMAGE="$5"
+  OUTSTRING=""
+  CMUSSTATUS="$(cmus-remote -C status)"
+  PLAYERSTATUS="$( echo "$CMUSSTATUS" | grep status\ | sed s/status\ //)"
+  if [ "$PLAYERSTATUS" == "" ] || [ "$PLAYERSTATUS" == "stopped" ]
+  then
+    cleanup
+    return
+  fi
+  #record last song
+  if ! [ -e /tmp/cmusinfo ]
+  then
+    touch /tmp/cmusinfo
+  fi
+  #gets last recorded file and compares to current file
+  if [ "$(sed -n '1p' /tmp/cmusinfo)" != "$(echo "$CMUSSTATUS" | grep file\ )" ]
+  then
+    ARTIST="$(echo "$CMUSSTATUS" | grep tag\ artist | sed s/tag\ artist\ //)"
+    TITLE="$(echo "$CMUSSTATUS" | grep tag\ title | sed s/tag\ title\ //)"
+    #removes path and file extension, leaving the filename
+    FILETITLE="$(basename "$(echo "$CMUSSTATUS" | grep file\  | sed s/file\ //)")"
+    FILETITLE="${FILETITLE%.*}"
+    if [ "$ARTIST" == "" ] || [ "$TITLE" == "" ]
+    then
+      OUTSTRING="$FILETITLE"
+    else
+      OUTSTRING="$TITLE - $ARTIST"
+    fi
+    if $ALBUMMODE
+    then
+      album "$CMUSSTATUS" "$MPVTITLE" "$IMAGE"
+      if $NOTIFY && $ALBUMMODE
+      then
+        #sends mpv notification & escape double quotes
+        echo '{ "command": ["show-text", "'"$(echo $OUTSTRING | sed s/\"/\\\\\"/g)"'", 5000] }' | \
+        socat - /tmp/mpvcmussocket > /dev/null
+      fi
+    fi
+    if $DESKTOP
+    then
+      notify-send "$OUTSTRING"
+    fi
+    echo "$CMUSSTATUS" | grep file\ > /tmp/cmusinfo
+    echo "$OUTSTRING" >> /tmp/cmusinfo
+  else
+    #gets last recorded status
+    OUTSTRING="$(sed -n '2p' /tmp/cmusinfo)"
+  fi
+  if [ "$PLAYERSTATUS" == "paused" ]
+  then
+    OUTSTRING="(P) $OUTSTRING"
+  fi
+  echo $OUTSTRING
+}
+function main
+{
+  ALBUMMODE=false
+  NOTIFY=false
+  DESKTOP=false
+  IMAGE="$HOME/.local/share/notfound.jpg"
+  MPVTITLE="Album Art"
+  REPEAT=false
+  DELAY=5
+  VERSION="0.0.1"
+  USAGE="USAGE:
+  -h or --help to print this text
+  -a or --album to turn on album mode
+  -n or --notify to turn on notifications for album mode
+  -nd or --notifydesktop turn on desktop notifications
+  -t or --title <title> to set mpv's title (Default: \"Album Art\")
+  -r or --repeat to have the program run more than once
+  -d or --delay <delay> set the programs delay in the loop (Default: 5)
+  -c or --clean cleans temporary files and exits
+  -i or --image sets mpv's image (Default: ~/.local/share/notfound.png OR blank window)
+  -l or --license displays license information and exits
+  -v or --version displays the version and exits"
+  CACHE=""
+  for i in "$@"
+  do
+    if ! [ "$CACHE" == "" ]
+    then
+      if [ "$CACHE" == "MPVTITLE" ]
+      then
+        MPVTITLE="$i"
+      elif [ "$CACHE" == "DELAY" ]
+      then
+        DELAY=$i
+      elif [ "$CACHE" == "IMAGE" ]
+      then
+        IMAGE="$i"
+      fi
+      CACHE=""
+      continue
+    fi
+    case $i in
+      "-h" | "--help")
+        echo "$USAGE"
+        exit
+        ;;
+      "-a" | "--album")
+        ALBUMMODE=true
+        ;;
+      "-n" | "--notify")
+        NOTIFY=true
+        ;;
+      "-nd" | "--notifydesktop")
+        DESKTOP=true
+        ;;
+      "-t" | "--title")
+        CACHE="MPVTITLE"
+        ;;
+      "-r" | "--repeat")
+        REPEAT=true
+        ;;
+      "-d" | "--delay")
+        CACHE="DELAY"
+        ;;
+      "-c" | "--clean")
+        cleanup "exit"
+        ;;
+      "-i" | "--image")
+        CACHE="IMAGE"
+        ;;
+      "-l" | "--license")
+        echo \
+"Album art and status line program for CMUS
+Copyright (C) 2020  ArisuTheWired
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>."
+        exit
+        ;;
+      "-v" | "--version")
+        echo "cmusinfo v$VERSION"
+        exit
+        ;;
+    esac
+  done
+  #cleans up properly on keyboard interrupt
+  trap "cleanup exit" SIGINT
+  while true
+  do
+    cmusinfo $ALBUMMODE $NOTIFY $DESKTOP "$MPVTITLE" "$IMAGE"
+    if ! $REPEAT
+    then
+      break
+    fi
+    sleep $DELAY
+  done
+}
+main "$@"
